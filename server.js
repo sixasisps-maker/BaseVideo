@@ -1,7 +1,3 @@
-/**
- * BASEVIDEO X ENTERPRISE - SERVER CORE v4.0
- * 1000 Satırlık Dev Proje Altyapısı
- */
 const express = require('express');
 const multer = require('multer');
 const cors = require('cors');
@@ -9,61 +5,51 @@ const fs = require('fs');
 const path = require('path');
 const app = express();
 
-// --- MIDDLEWARES ---
-app.use(cors());
+// --- 2026 KURUMSAL AYARLAR ---
+app.use(cors({ origin: '*' })); // Her cihazdan gelen isteği kabul et
 app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
-// --- DATABASE ENGINE ---
-const DB_PATH = './basevideo_pro_max.json';
+const DB_FILE = './basevideo_enterprise_core.json';
 const UPLOAD_DIR = './uploads';
 
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR);
-if (!fs.existsSync(DB_PATH)) {
-    const initialSchema = {
-        users: [],
-        videos: [],
-        notifications: [],
-        system: { version: "4.0.0", logs: [] }
-    };
-    fs.writeFileSync(DB_PATH, JSON.stringify(initialSchema, null, 2));
+if (!fs.existsSync(DB_FILE)) {
+    fs.writeFileSync(DB_FILE, JSON.stringify({ 
+        users: [], videos: [], 
+        system_stats: { total_views: 0, server_start: new Date() } 
+    }, null, 2));
 }
 
 const db = {
-    read: () => JSON.parse(fs.readFileSync(DB_PATH)),
-    write: (data) => fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2)),
-    log: (msg) => {
-        const d = JSON.parse(fs.readFileSync(DB_PATH));
-        d.system.logs.push({ time: new Date(), msg });
-        fs.writeFileSync(DB_PATH, JSON.stringify(d, null, 2));
-    }
+    load: () => JSON.parse(fs.readFileSync(DB_FILE)),
+    save: (data) => fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2))
 };
 
-// --- AUTHENTICATION API (Şifre, Yaş, Cinsiyet) ---
+// --- KİMLİK DOĞRULAMA (LOGIN/REGISTER) ---
 app.post('/api/auth', (req, res) => {
     const { username, password, mode, age, gender } = req.body;
-    const data = db.read();
-    const user = data.users.find(u => u.username.toLowerCase() === username.toLowerCase());
+    const data = db.load();
+    const existingUser = data.users.find(u => u.username.toLowerCase() === username.toLowerCase());
 
     if (mode === 'register') {
-        if (user) return res.status(400).json({ error: "Bu kullanıcı adı zaten alınmış!" });
-        const newUser = {
-            id: "user_" + Date.now(),
-            username, password, age, gender,
-            subs: 0, following: [], likes: [],
-            joined: new Date().toLocaleDateString('tr-TR')
+        if (existingUser) return res.status(400).json({ error: "Bu isimle bir hesap zaten var!" });
+        const newUser = { 
+            id: Date.now(), username, password, age, gender, 
+            joined: "2026", subs: 0, avatar: username[0].toUpperCase() 
         };
         data.users.push(newUser);
-        db.write(data);
-        db.log(`Yeni kullanıcı: ${username}`);
+        db.save(data);
         return res.json({ success: true, user: newUser });
     } else {
-        if (!user || user.password !== password) return res.status(401).json({ error: "Hatalı giriş bilgileri!" });
-        return res.json({ success: true, user });
+        if (!existingUser || existingUser.password !== password) {
+            return res.status(401).json({ error: "Giriş bilgileri yanlış!" });
+        }
+        return res.json({ success: true, user: existingUser });
     }
 });
 
-// --- VIDEO ENGINE ---
+// --- VİDEO YÖNETİMİ ---
 const storage = multer.diskStorage({
     destination: UPLOAD_DIR,
     filename: (req, file, cb) => cb(null, `BVX_${Date.now()}_${file.originalname}`)
@@ -71,35 +57,31 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 
 app.post('/api/upload', upload.single('video'), (req, res) => {
-    const data = db.read();
-    // Dinamik URL Oluşturma (IP Bağımsız)
-    const protocol = req.protocol;
-    const host = req.get('host');
-    
+    const data = db.load();
     const video = {
-        id: "vid_" + Date.now(),
+        id: Date.now(),
         title: req.body.title || "Adsız Video",
         author: req.body.username,
-        url: `${protocol}://${host}/uploads/${req.file.filename}`,
+        url: `/uploads/${req.file.filename}`,
         isShort: req.body.isShort === 'true',
-        views: 0, likes: 0,
-        timestamp: new Date()
+        views: 0,
+        likes: 0
     };
     data.videos.unshift(video);
-    db.write(data);
+    db.save(data);
     res.json({ success: true, video });
 });
 
-app.get('/api/videos', (req, res) => res.json(db.read().videos));
+app.get('/api/stream', (req, res) => res.json(db.load().videos));
 
-// --- SERVER START ---
+// --- SERVER BAŞLATICI (HER AĞA AÇIK) ---
 const PORT = 3000;
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`
-    ============================================
-    🚀 BASEVIDEO X ULTIMATE SERVER ONLINE
-    🏠 Local: http://localhost:${PORT}
-    📡 Network: http://[BİLGİSAYAR_IP]:${PORT}
-    ============================================
+    =============================================
+    🚀 BASEVIDEO X ENTERPRISE SERVER AKTİF!
+    🌐 Yerel Erişim: http://localhost:${PORT}
+    📡 Port: ${PORT} (Tüm ağlara açık)
+    =============================================
     `);
 });

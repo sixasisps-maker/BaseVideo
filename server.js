@@ -9,84 +9,75 @@ app.use(cors());
 app.use(express.json());
 app.use('/uploads', express.static('uploads'));
 
-const DATA_FILE = './database.json';
+const DB_FILE = './database.json';
 
-// Veritabanı başlatma
-if (!fs.existsSync(DATA_FILE)) {
-    fs.writeFileSync(DATA_FILE, JSON.stringify([]));
+// Veritabanı Yapısı: { users: [], videos: [] }
+if (!fs.existsSync(DB_FILE)) {
+    fs.writeFileSync(DB_FILE, JSON.stringify({ users: [], videos: [] }));
 }
 
-// Uploads klasörü kontrolü
-if (!fs.existsSync('./uploads')) fs.mkdirSync('./uploads');
+const upload = multer({ dest: 'uploads/' });
 
-const storage = multer.diskStorage({
-    destination: 'uploads/',
-    filename: (req, file, cb) => {
-        cb(null, Date.now() + '-' + file.originalname);
+const readDB = () => JSON.parse(fs.readFileSync(DB_FILE));
+const writeDB = (data) => fs.writeFileSync(DB_FILE, JSON.stringify(data));
+
+// GİRİŞ / KAYIT SİSTEMİ
+app.post('/api/auth', (req, res) => {
+    const { username, password } = req.body;
+    const db = readDB();
+    let user = db.users.find(u => u.username === username);
+
+    if (!user) {
+        user = { username, password, subs: 0, subbedTo: [], joined: new Date().toLocaleDateString('tr-TR') };
+        db.users.push(user);
+        writeDB(db);
+    } else if (user.password !== password) {
+        return res.json({ success: false, message: "Hatalı Şifre!" });
     }
-});
-const upload = multer({ storage: storage });
-
-// 1. Tüm Videoları Getir
-app.get('/api/videos', (req, res) => {
-    const data = JSON.parse(fs.readFileSync(DATA_FILE));
-    res.json(data);
+    res.json({ success: true, user });
 });
 
-// 2. Video Yükle
+// VİDEO YÜKLEME (OTOMATİK KANAL)
 app.post('/api/upload', upload.single('video'), (req, res) => {
-    const data = JSON.parse(fs.readFileSync(DATA_FILE));
+    const { title, username } = req.body;
+    const db = readDB();
     const newVideo = {
         id: "vid_" + Date.now(),
-        title: req.body.title || 'Adsız Nostalji',
-        channel: req.body.channel || 'Anonim Kullanıcı',
+        title: title || "Adsız Video",
+        channel: username,
         url: `https://${req.get('host')}/uploads/${req.file.filename}`,
         views: 0,
         likes: 0,
         comments: [],
-        timestamp: new Date().toLocaleDateString('tr-TR')
+        date: new Date().toLocaleDateString('tr-TR')
     };
-    data.unshift(newVideo);
-    fs.writeFileSync(DATA_FILE, JSON.stringify(data));
-    res.json({ success: true, video: newVideo });
-});
-
-// 3. İzlenme Artır (+1)
-app.post('/api/view/:id', (req, res) => {
-    const data = JSON.parse(fs.readFileSync(DATA_FILE));
-    const video = data.find(v => v.id === req.params.id);
-    if (video) {
-        video.views++;
-        fs.writeFileSync(DATA_FILE, JSON.stringify(data));
-    }
-    res.json({ success: true, views: video ? video.views : 0 });
-});
-
-// 4. Beğeni Artır (+1)
-app.post('/api/like/:id', (req, res) => {
-    const data = JSON.parse(fs.readFileSync(DATA_FILE));
-    const video = data.find(v => v.id === req.params.id);
-    if (video) {
-        video.likes++;
-        fs.writeFileSync(DATA_FILE, JSON.stringify(data));
-    }
-    res.json({ success: true, likes: video ? video.likes : 0 });
-});
-
-// 5. Yorum Ekle
-app.post('/api/comment/:id', (req, res) => {
-    const data = JSON.parse(fs.readFileSync(DATA_FILE));
-    const video = data.find(v => v.id === req.params.id);
-    if (video) {
-        video.comments.push({
-            user: "User_" + Math.floor(Math.random() * 999),
-            text: req.body.text,
-            time: "Şimdi"
-        });
-        fs.writeFileSync(DATA_FILE, JSON.stringify(data));
-    }
+    db.videos.unshift(newVideo);
+    writeDB(db);
     res.json({ success: true });
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`BaseVideo Sunucusu ${PORT} portunda fena çalışıyor!`));
+// ABONE OLMA
+app.post('/api/sub', (req, res) => {
+    const { me, target } = req.body;
+    const db = readDB();
+    const targetUser = db.users.find(u => u.username === target);
+    const meUser = db.users.find(u => u.username === me);
+
+    if (targetUser && meUser && !meUser.subbedTo.includes(target)) {
+        targetUser.subs++;
+        meUser.subbedTo.push(target);
+        writeDB(db);
+    }
+    res.json({ success: true, newSubs: targetUser ? targetUser.subs : 0 });
+});
+
+// DİĞER APİLER
+app.get('/api/videos', (req, res) => res.json(readDB().videos));
+app.post('/api/view/:id', (req, res) => {
+    const db = readDB();
+    const v = db.videos.find(x => x.id === req.params.id);
+    if(v) { v.views++; writeDB(db); }
+    res.json({ success: true });
+});
+
+app.listen(process.env.PORT || 3000);

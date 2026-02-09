@@ -2,54 +2,56 @@ const express = require('express');
 const multer = require('multer');
 const cors = require('cors');
 const fs = require('fs');
-const path = require('path');
-
 const app = express();
-app.use(cors()); // Tarayıcı erişimi için şart
+
+app.use(cors());
 app.use(express.json());
-app.use('/uploads', express.static('uploads')); // Videolara erişim sağlar
+app.use('/uploads', express.static('uploads'));
 
 const DATA_FILE = './videos.json';
+if (!fs.existsSync(DATA_FILE)) fs.writeFileSync(DATA_FILE, JSON.stringify([]));
 
-// Veritabanı dosyasını kontrol et, yoksa oluştur
-if (!fs.existsSync(DATA_FILE)) {
-    fs.writeFileSync(DATA_FILE, JSON.stringify([]));
-}
+const upload = multer({ dest: 'uploads/' });
 
-// Uploads klasörü yoksa oluştur
-if (!fs.existsSync('./uploads')) {
-    fs.mkdirSync('./uploads');
-}
-
-const storage = multer.diskStorage({
-    destination: 'uploads/',
-    filename: (req, file, cb) => {
-        cb(null, Date.now() + '-' + file.originalname);
-    }
-});
-const upload = multer({ storage: storage });
-
-// VİDEOLARI LİSTELE (GET)
+// VİDEOLARI LİSTELE
 app.get('/videos', (req, res) => {
-    const data = JSON.parse(fs.readFileSync(DATA_FILE));
-    res.json(data);
+    res.json(JSON.parse(fs.readFileSync(DATA_FILE)));
 });
 
-// VİDEO YÜKLE (POST)
+// VİDEO YÜKLE
 app.post('/upload', upload.single('video'), (req, res) => {
-    if (!req.file) return res.status(400).json({ success: false });
-
     const videos = JSON.parse(fs.readFileSync(DATA_FILE));
     const newVideo = {
+        id: Date.now().toString(),
         title: req.body.title || 'İsimsiz Video',
         url: `https://${req.get('host')}/uploads/${req.file.filename}`,
+        views: 0,
+        likes: Math.floor(Math.random() * 10),
+        comments: [],
         createdAt: Date.now()
     };
-    
-    videos.unshift(newVideo); // Yeni videoyu en üste ekle
+    videos.unshift(newVideo);
     fs.writeFileSync(DATA_FILE, JSON.stringify(videos));
-    res.json({ success: true, url: newVideo.url });
+    res.json({ success: true });
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Sunucu ${PORT} portunda aktif!`));
+// İZLENME ARTIR (+1)
+app.post('/view/:id', (req, res) => {
+    const videos = JSON.parse(fs.readFileSync(DATA_FILE));
+    const v = videos.find(x => x.id === req.params.id);
+    if(v) { v.views++; fs.writeFileSync(DATA_FILE, JSON.stringify(videos)); }
+    res.json({ success: true, views: v ? v.views : 0 });
+});
+
+// YORUM EKLE
+app.post('/comment/:id', (req, res) => {
+    const videos = JSON.parse(fs.readFileSync(DATA_FILE));
+    const v = videos.find(x => x.id === req.params.id);
+    if(v) {
+        v.comments.push({ user: "Anonim", text: req.body.text, date: Date.now() });
+        fs.writeFileSync(DATA_FILE, JSON.stringify(videos));
+    }
+    res.json({ success: true });
+});
+
+app.listen(process.env.PORT || 3000);

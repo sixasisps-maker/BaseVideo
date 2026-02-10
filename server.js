@@ -1,84 +1,106 @@
-const API = "https://basevideo.onrender.com";
-let curVid = null, userData = JSON.parse(localStorage.getItem('bv_user')), targetChannel = "";
+const express = require('express');
+const multer = require('multer');
+const cors = require('cors');
+const fs = require('fs');
+const path = require('path');
 
-const App = {
-    // SAYFA DEĞİŞTİRME SİSTEMİ (GEÇMİŞ DESTEKLİ)
-    togglePage(id, pushState = true) {
-        document.querySelectorAll('.full-screen').forEach(s => s.style.display = 'none');
-        const target = document.getElementById('screen-' + id);
-        
-        if (target) {
-            target.style.display = 'flex';
-            // Sayfa değişimini tarayıcı geçmişine ekle (Siyah ekranı önler)
-            if (pushState) history.pushState({ page: id }, "", "#" + id);
-        }
+const app = express();
+app.use(cors());
+app.use(express.json());
+app.use('/uploads', express.static('uploads'));
 
-        if(id === 'comments') this.renderComs();
-    },
+const DB_FILE = './database.json';
 
-    // VİDEO OYNATMA
-    play(v) {
-        curVid = v;
-        this.togglePage('player');
-        const player = document.getElementById('p-video');
-        player.src = API + v.url;
-        player.play();
-        
-        document.getElementById('p-title').innerText = v.title;
-        document.getElementById('p-author').innerText = v.author;
-        document.getElementById('p-likes').innerText = v.likes;
-        document.getElementById('p-coms').innerText = v.comments.length;
-        document.getElementById('p-views').innerText = v.views + " views";
-        
-        // Silme butonu kontrolü
-        const delBtn = document.getElementById('del-btn');
-        if(delBtn) delBtn.style.display = (v.author === userData.username) ? 'block' : 'none';
+// Veritabanı Başlatma
+if (!fs.existsSync(DB_FILE)) {
+    fs.writeFileSync(DB_FILE, JSON.stringify({ videos: [], users: [] }));
+}
 
-        fetch(`${API}/api/action`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id:v.id, type:'view'}) });
-    },
-
-    // ANA SAYFAYA DÖNÜŞ (VİDEOYU DURDURUR)
-    backToHome() {
-        const player = document.getElementById('p-video');
-        if(player) {
-            player.pause();
-            player.src = ""; // Belleği temizle
-        }
-        this.togglePage('home');
-        this.loadFeed();
-    },
-
-    // LOGOUT (SİSTEMDEN TAM ÇIKIŞ)
-    logout() {
-        if(confirm("Çıkış yapmak istediğine emin misin?")) {
-            localStorage.clear();
-            location.href = location.pathname; // Sayfayı tertemiz baştan yükle
-        }
-    },
-
-    // ... diğer fonksiyonlar (loadFeed, login, upload vb.) aynı kalacak ...
+const db = {
+    read: () => JSON.parse(fs.readFileSync(DB_FILE, 'utf8')),
+    save: (data) => fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2))
 };
 
-// --- KRİTİK: TELEFONUN GERİ TUŞUNU YAKALAMA ---
-window.onpopstate = function(event) {
-    if (event.state && event.state.page) {
-        // Eğer geri basıldıysa ve bir önceki sayfa varsa oraya dön
-        App.togglePage(event.state.page, false);
-        if(event.state.page === 'home') {
-            document.getElementById('p-video').pause();
-        }
-    } else {
-        // Geçmiş bittiyse login veya home'a at
-        userData ? App.togglePage('home', false) : App.togglePage('login', false);
+// --- KULLANICI & KANAL ---
+app.post('/api/login', (req, res) => {
+    const { username, password } = req.body;
+    const data = db.read();
+    let user = data.users.find(u => u.username === username);
+    if (!user) {
+        user = { username, password, subs: [], joined: new Date().toLocaleDateString('tr-TR') };
+        data.users.push(user);
+        db.save(data);
     }
-};
+    res.json({ success: true, user });
+});
 
-// Başlangıç
-window.onload = () => {
-    if(userData) {
-        App.togglePage('home');
-        App.loadFeed();
-    } else {
-        App.togglePage('login');
+app.post('/api/subscribe', (req, res) => {
+    const { follower, target } = req.body;
+    const data = db.read();
+    const u = data.users.find(x => x.username === follower);
+    if(u) {
+        if(!u.subs.includes(target)) u.subs.push(target);
+        else u.subs = u.subs.filter(s => s !== target);
+        db.save(data);
     }
-};
+    res.json(u);
+});
+
+// --- VİDEO İŞLEMLERİ ---
+app.get('/api/videos', (req, res) => res.json(db.read().videos));
+
+app.post('/api/action', (req, res) => {
+    const { id, type, val } = req.body;
+    const data = db.read();
+    const v = data.videos.find(x => x.id === id);
+    if(v) {
+        if(type === 'view') v.views++;
+        if(type === 'like') v.likes++;
+        if(type === 'rate') v.rating = val; // 1-5 arası yıldız
+        db.save(data);
+    }
+    res.json(v);
+});
+
+// YORUM SİSTEMİ (KRİTİK)
+app.post('/api/comment', (req, res) => {
+    const { id, user, text } = req.body;
+    const data = db.read();
+    const v = data.videos.find(x => x.id === id);
+    if(v && text) {
+        v.comments.push({ user, text, date: new Date().toLocaleString() });
+        db.save(data);
+    }
+    res.json(v);
+});
+
+app.post('/api/delete-video', (req, res) => {
+    const { id, username } = req.body;
+    const data = db.read();
+    data.videos = data.videos.filter(v => !(v.id === id && v.author === username));
+    db.save(data);
+    res.json({ success: true });
+});
+
+// DOSYA YÜKLEME
+const upload = multer({ storage: multer.diskStorage({
+    destination: 'uploads/',
+    filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname))
+})});
+
+app.post('/api/upload', upload.single('video'), (req, res) => {
+    const data = db.read();
+    const newVid = {
+        id: Date.now().toString(),
+        title: req.body.title,
+        author: req.body.username,
+        url: `/uploads/${req.file.filename}`,
+        views: 0, likes: 0, rating: 0,
+        comments: []
+    };
+    data.videos.unshift(newVid);
+    db.save(data);
+    res.json(newVid);
+});
+
+app.listen(3000, () => console.log("Server 3000 hazır!"));
